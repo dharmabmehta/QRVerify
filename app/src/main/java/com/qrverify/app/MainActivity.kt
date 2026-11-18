@@ -1,4 +1,4 @@
-import androidx.camera.view.CameraController
+
 package com.qrverify.app
 
 import android.Manifest
@@ -80,11 +80,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // BUILD APP INTERFACE
+
     private fun buildInterface() {
 
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
         }
+
+        // Camera preview
 
         preview = PreviewView(this).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -121,7 +125,9 @@ class MainActivity : ComponentActivity() {
             textSize = 13f
             setTextColor(Color.WHITE)
             setPadding(14, 10, 4, 10)
-            setOnClickListener { showHistory() }
+            setOnClickListener {
+                showHistory()
+            }
         }
 
         top.addView(historyButton)
@@ -240,6 +246,7 @@ class MainActivity : ComponentActivity() {
     // CAMERA PERMISSION
 
     private fun hasCameraPermission(): Boolean {
+
         return ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.CAMERA
@@ -251,13 +258,16 @@ class MainActivity : ComponentActivity() {
     private fun startCamera() {
 
         try {
+
             cameraController = LifecycleCameraController(this)
 
             cameraController.cameraSelector =
                 CameraSelector.DEFAULT_BACK_CAMERA
 
+            // Enable QR image analysis.
+            // Preview is managed automatically by PreviewView.
+
             cameraController.setEnabledUseCases(
-            CameraController.PREVIEW or
                 CameraController.IMAGE_ANALYSIS
             )
 
@@ -274,6 +284,7 @@ class MainActivity : ComponentActivity() {
             statusText.text = "Point camera at a QR code"
 
         } catch (e: Exception) {
+
             statusText.text =
                 "Camera error: ${e.localizedMessage}"
         }
@@ -289,6 +300,7 @@ class MainActivity : ComponentActivity() {
         }
 
         try {
+
             val mediaImage = imageProxy.image
 
             if (mediaImage == null) {
@@ -308,6 +320,7 @@ class MainActivity : ComponentActivity() {
                     val raw = codes.firstOrNull()?.rawValue
 
                     if (raw.isNullOrBlank()) {
+
                         noCodeFrames++
 
                         if (noCodeFrames >= 8) {
@@ -315,9 +328,11 @@ class MainActivity : ComponentActivity() {
                         }
 
                     } else {
+
                         noCodeFrames = 0
 
                         if (raw != lastValue) {
+
                             lastValue = raw
 
                             runOnUiThread {
@@ -330,11 +345,13 @@ class MainActivity : ComponentActivity() {
                     // Ignore individual frame errors.
                 }
                 .addOnCompleteListener {
+
                     imageProxy.close()
                     busy.set(false)
                 }
 
         } catch (_: Exception) {
+
             imageProxy.close()
             busy.set(false)
         }
@@ -387,13 +404,16 @@ class MainActivity : ComponentActivity() {
                         }
 
                     try {
+
                         startActivity(
                             Intent(
                                 Intent.ACTION_VIEW,
                                 Uri.parse(target)
                             )
                         )
+
                     } catch (_: Exception) {
+
                         Toast.makeText(
                             this,
                             "Unable to open URL",
@@ -527,10 +547,13 @@ class MainActivity : ComponentActivity() {
     ) {
 
         val old = try {
+
             JSONArray(
                 prefs.getString("history", "[]")
             )
+
         } catch (_: Exception) {
+
             JSONArray()
         }
 
@@ -555,10 +578,13 @@ class MainActivity : ComponentActivity() {
     private fun showHistory() {
 
         val history = try {
+
             JSONArray(
                 prefs.getString("history", "[]")
             )
+
         } catch (_: Exception) {
+
             JSONArray()
         }
 
@@ -570,8 +596,11 @@ class MainActivity : ComponentActivity() {
         }
 
         val message = if (entries.isEmpty()) {
+
             "No scans yet."
+
         } else {
+
             entries.joinToString(
                 "\n\n────────────\n\n"
             )
@@ -593,7 +622,6 @@ class MainActivity : ComponentActivity() {
     // CLEANUP
 
     override fun onDestroy() {
-        super.onDestroy()
 
         if (::cameraController.isInitialized) {
             cameraController.clearImageAnalysisAnalyzer()
@@ -602,5 +630,7 @@ class MainActivity : ComponentActivity() {
 
         scanner.close()
         cameraExecutor.shutdown()
+
+        super.onDestroy()
     }
 }
