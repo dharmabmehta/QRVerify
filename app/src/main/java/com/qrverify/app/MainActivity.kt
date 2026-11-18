@@ -1,3 +1,4 @@
+
 package com.qrverify.app
 
 import android.Manifest
@@ -12,12 +13,12 @@ import android.view.Gravity
 import android.view.View
 import android.widget.*
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.CameraController
 import androidx.camera.core.ImageProxy
+import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -48,6 +49,17 @@ class MainActivity : ComponentActivity() {
         getSharedPreferences("qr_verify", MODE_PRIVATE)
     }
 
+    private val cameraPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
+                startCamera()
+            } else if (::statusText.isInitialized) {
+                statusText.text = "Camera permission is required."
+            }
+        }
+
     private val scanner by lazy {
         val options = BarcodeScannerOptions.Builder()
             .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
@@ -64,11 +76,7 @@ class MainActivity : ComponentActivity() {
         if (hasCameraPermission()) {
             startCamera()
         } else {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.CAMERA),
-                41
-            )
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -232,32 +240,10 @@ class MainActivity : ComponentActivity() {
     // CAMERA PERMISSION
 
     private fun hasCameraPermission(): Boolean {
-
         return ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(
-            requestCode,
-            permissions,
-            grantResults
-        )
-
-        if (
-            requestCode == 41 &&
-            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        ) {
-            startCamera()
-        } else {
-            statusText.text = "Camera permission is required."
-        }
     }
 
     // CAMERA INITIALISATION
@@ -265,20 +251,19 @@ class MainActivity : ComponentActivity() {
     private fun startCamera() {
 
         try {
-
             cameraController = LifecycleCameraController(this)
 
             cameraController.cameraSelector =
                 CameraSelector.DEFAULT_BACK_CAMERA
 
             cameraController.setEnabledUseCases(
-                CameraController.IMAGE_ANALYSIS
+                CameraController.PREVIEW or
+                    CameraController.IMAGE_ANALYSIS
             )
 
             cameraController.setImageAnalysisAnalyzer(
                 cameraExecutor
             ) { imageProxy ->
-
                 processImage(imageProxy)
             }
 
@@ -289,7 +274,6 @@ class MainActivity : ComponentActivity() {
             statusText.text = "Point camera at a QR code"
 
         } catch (e: Exception) {
-
             statusText.text =
                 "Camera error: ${e.localizedMessage}"
         }
@@ -304,54 +288,56 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val mediaImage = imageProxy.image
+        try {
+            val mediaImage = imageProxy.image
 
-        if (mediaImage == null) {
-            imageProxy.close()
-            busy.set(false)
-            return
-        }
+            if (mediaImage == null) {
+                imageProxy.close()
+                busy.set(false)
+                return
+            }
 
-        val image = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
+            val image = InputImage.fromMediaImage(
+                mediaImage,
+                imageProxy.imageInfo.rotationDegrees
+            )
 
-        scanner.process(image)
-            .addOnSuccessListener { codes ->
+            scanner.process(image)
+                .addOnSuccessListener { codes ->
 
-                val raw = codes.firstOrNull()?.rawValue
+                    val raw = codes.firstOrNull()?.rawValue
 
-                if (raw.isNullOrBlank()) {
+                    if (raw.isNullOrBlank()) {
+                        noCodeFrames++
 
-                    noCodeFrames++
+                        if (noCodeFrames >= 8) {
+                            lastValue = null
+                        }
 
-                    if (noCodeFrames >= 8) {
-                        lastValue = null
-                    }
+                    } else {
+                        noCodeFrames = 0
 
-                } else {
+                        if (raw != lastValue) {
+                            lastValue = raw
 
-                    noCodeFrames = 0
-
-                    if (raw != lastValue) {
-
-                        lastValue = raw
-
-                        runOnUiThread {
-                            showResult(raw)
+                            runOnUiThread {
+                                showResult(raw)
+                            }
                         }
                     }
                 }
-            }
-            .addOnFailureListener {
-                // Ignore individual frame errors.
-            }
-            .addOnCompleteListener {
+                .addOnFailureListener {
+                    // Ignore individual frame errors.
+                }
+                .addOnCompleteListener {
+                    imageProxy.close()
+                    busy.set(false)
+                }
 
-                imageProxy.close()
-                busy.set(false)
-            }
+        } catch (_: Exception) {
+            imageProxy.close()
+            busy.set(false)
+        }
     }
 
     // DISPLAY QR RESULT
@@ -401,16 +387,13 @@ class MainActivity : ComponentActivity() {
                         }
 
                     try {
-
                         startActivity(
                             Intent(
                                 Intent.ACTION_VIEW,
                                 Uri.parse(target)
                             )
                         )
-
                     } catch (_: Exception) {
-
                         Toast.makeText(
                             this,
                             "Unable to open URL",
@@ -613,7 +596,6 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
 
         if (::cameraController.isInitialized) {
-
             cameraController.clearImageAnalysisAnalyzer()
             cameraController.unbind()
         }
