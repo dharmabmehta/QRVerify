@@ -1,3 +1,4 @@
+
 package com.qrverify.app
 
 import android.Manifest
@@ -10,10 +11,8 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.*
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageProxy
-import androidx.camera.view.CameraController
-import androidx.camera.view.LifecycleCameraController
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -35,8 +34,6 @@ class MainActivity : Activity() {
     private lateinit var actions: LinearLayout
     private lateinit var statusText: TextView
 
-    private lateinit var cameraController: LifecycleCameraController
-
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private val busy = AtomicBoolean(false)
 
@@ -44,7 +41,7 @@ class MainActivity : Activity() {
     private var noCodeFrames = 0
 
     private var currentValue: String? = null
-    private var currentType = "Text"
+    private var currentType: String = "Text"
 
     private val prefs by lazy {
         getSharedPreferences("qr_verify", MODE_PRIVATE)
@@ -81,7 +78,7 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(-1, -1)
         )
 
-        // Top navigation
+        // Top navigation bar
 
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -107,14 +104,21 @@ class MainActivity : Activity() {
             textSize = 13f
             setTextColor(Color.WHITE)
             setPadding(14, 10, 4, 10)
-            setOnClickListener { showHistory() }
+
+            setOnClickListener {
+                showHistory()
+            }
         }
 
         top.addView(historyButton)
 
         root.addView(
             top,
-            FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
+            FrameLayout.LayoutParams(
+                -1,
+                -2,
+                Gravity.TOP
+            )
         )
 
         // Scanner status
@@ -129,14 +133,16 @@ class MainActivity : Activity() {
         }
 
         val statusParams = FrameLayout.LayoutParams(
-            -1, -2, Gravity.TOP
+            -1,
+            -2,
+            Gravity.TOP
         ).apply {
             topMargin = 66
         }
 
         root.addView(statusText, statusParams)
 
-        // Bottom popup
+        // Bottom result popup
 
         resultCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -176,6 +182,7 @@ class MainActivity : Activity() {
             textSize = 22f
             setTextColor(Color.DKGRAY)
             setPadding(12, 4, 4, 8)
+
             setOnClickListener {
                 resultCard.visibility = View.GONE
             }
@@ -201,7 +208,9 @@ class MainActivity : Activity() {
         resultCard.addView(actions)
 
         val cardParams = FrameLayout.LayoutParams(
-            -1, -2, Gravity.BOTTOM
+            -1,
+            -2,
+            Gravity.BOTTOM
         ).apply {
             setMargins(10, 0, 10, 12)
         }
@@ -235,7 +244,8 @@ class MainActivity : Activity() {
         ) {
             startCamera()
         } else {
-            statusText.text = "Camera permission is required."
+            statusText.text =
+                "Camera permission is required to scan QR codes."
         }
     }
 
@@ -243,105 +253,115 @@ class MainActivity : Activity() {
 
     private fun startCamera() {
 
-        try {
+        val providerFuture =
+            ProcessCameraProvider.getInstance(this)
 
-            cameraController = LifecycleCameraController(this)
+        providerFuture.addListener({
 
-            cameraController.cameraSelector =
-                CameraSelector.DEFAULT_BACK_CAMERA
+            val provider = providerFuture.get()
 
-            cameraController.setEnabledUseCases(
-                CameraController.IMAGE_ANALYSIS
-            )
+            val previewUseCase = Preview.Builder()
+                .build()
+                .also {
+                    it.setSurfaceProvider(preview.surfaceProvider)
+                }
 
-            cameraController.setImageAnalysisAnalyzer(
-                cameraExecutor
-            ) { imageProxy ->
+            val options = BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
 
-                processImage(imageProxy)
-            }
+            val scanner = BarcodeScanning.getClient(options)
 
-            preview.controller = cameraController
+            val analysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(
+                    ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+                )
+                .build()
 
-            cameraController.bindToLifecycle(this)
+            analysis.setAnalyzer(cameraExecutor) { proxy ->
 
-            statusText.text = "Point camera at a QR code"
+                if (!busy.compareAndSet(false, true)) {
+                    proxy.close()
+                    return@setAnalyzer
+                }
 
-        } catch (e: Exception) {
+                val media = proxy.image
 
-            statusText.text =
-                "Unable to start camera: ${e.localizedMessage}"
-        }
-    }
+                if (media == null) {
+                    proxy.close()
+                    busy.set(false)
+                    return@setAnalyzer
+                }
 
-    // QR DETECTION
+                val image = InputImage.fromMediaImage(
+                    media,
+                    proxy.imageInfo.rotationDegrees
+                )
 
-    private val scanner by lazy {
+                scanner.process(image)
+                    .addOnSuccessListener { codes ->
 
-        val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .build()
+                        val raw = codes.firstOrNull()?.rawValue
 
-        BarcodeScanning.getClient(options)
-    }
+                        if (raw.isNullOrBlank()) {
 
-    private fun processImage(imageProxy: ImageProxy) {
+                            noCodeFrames++
 
-        if (!busy.compareAndSet(false, true)) {
-            imageProxy.close()
-            return
-        }
+                            // Allow the same QR to be scanned
+                            // again after it leaves the camera.
 
-        val mediaImage = imageProxy.image
+                            if (noCodeFrames >= 8) {
+                                lastValue = null
+                            }
 
-        if (mediaImage == null) {
-            imageProxy.close()
-            busy.set(false)
-            return
-        }
+                        } else {
 
-        val image = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
+                            noCodeFrames = 0
 
-        scanner.process(image)
-            .addOnSuccessListener { codes ->
+                            if (raw != lastValue) {
 
-                val raw = codes.firstOrNull()?.rawValue
+                                lastValue = raw
 
-                if (raw.isNullOrBlank()) {
-
-                    noCodeFrames++
-
-                    if (noCodeFrames >= 8) {
-                        lastValue = null
-                    }
-
-                } else {
-
-                    noCodeFrames = 0
-
-                    if (raw != lastValue) {
-
-                        lastValue = raw
-
-                        runOnUiThread {
-                            showResult(raw)
+                                runOnUiThread {
+                                    showResult(raw)
+                                }
+                            }
                         }
                     }
-                }
+                    .addOnCompleteListener {
+                        proxy.close()
+                        busy.set(false)
+                    }
             }
-            .addOnFailureListener {
-                // Ignore individual frame errors.
+
+            try {
+
+                provider.unbindAll()
+
+                // Public CameraX API:
+                // Bind preview and analysis together.
+
+                val useCaseGroup = UseCaseGroup.Builder()
+                    .addUseCase(previewUseCase)
+                    .addUseCase(analysis)
+                    .build()
+
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    useCaseGroup
+                )
+
+            } catch (e: Exception) {
+
+                statusText.text =
+                    "Unable to start camera: ${e.localizedMessage}"
             }
-            .addOnCompleteListener {
-                imageProxy.close()
-                busy.set(false)
-            }
+
+        }, ContextCompat.getMainExecutor(this))
     }
 
-    // DISPLAY QR RESULT
+    // QR RESULT HANDLING
 
     private fun showResult(raw: String) {
 
@@ -350,7 +370,8 @@ class MainActivity : Activity() {
         currentType = when {
 
             raw.trimStart().startsWith(
-                "BEGIN:VCARD", true
+                "BEGIN:VCARD",
+                true
             ) -> "Contact (vCard)"
 
             raw.trim().matches(
@@ -398,7 +419,7 @@ class MainActivity : Activity() {
                     } catch (_: Exception) {
                         Toast.makeText(
                             this,
-                            "Unable to open URL",
+                            "No app can open this URL",
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -426,7 +447,8 @@ class MainActivity : Activity() {
 
         saveHistory(raw, currentType)
 
-        statusText.text = "QR detected • Scan the next code"
+        statusText.text =
+            "QR detected • Scan the next code"
 
         resultCard.visibility = View.VISIBLE
     }
@@ -450,6 +472,14 @@ class MainActivity : Activity() {
             }
         }
 
+        val wanted = listOf(
+            "FN",
+            "ORG",
+            "TEL",
+            "EMAIL",
+            "URL"
+        )
+
         val labels = mapOf(
             "FN" to "Name",
             "ORG" to "Company",
@@ -459,9 +489,9 @@ class MainActivity : Activity() {
         )
 
         return fields
-            .filter { labels.containsKey(it.first.uppercase()) }
+            .filter { it.first.uppercase() in wanted }
             .joinToString("\n") {
-                "${labels[it.first.uppercase()]}: ${it.second}"
+                "${labels[it.first.uppercase()] ?: it.first}: ${it.second}"
             }
             .ifBlank {
                 "Contact card detected"
@@ -472,7 +502,7 @@ class MainActivity : Activity() {
         contentText.text = raw
     }
 
-    // POPUP BUTTONS
+    // POPUP ACTION BUTTONS
 
     private fun addAction(
         label: String,
@@ -480,6 +510,7 @@ class MainActivity : Activity() {
     ) {
 
         val button = TextView(this).apply {
+
             text = label
             textSize = 13f
             gravity = Gravity.CENTER
@@ -493,7 +524,9 @@ class MainActivity : Activity() {
         }
 
         val lp = LinearLayout.LayoutParams(
-            0, -2, 1f
+            0,
+            -2,
+            1f
         ).apply {
             setMargins(4, 4, 4, 4)
         }
@@ -501,7 +534,7 @@ class MainActivity : Activity() {
         actions.addView(button, lp)
     }
 
-    // COPY CONTENT
+    // COPY QR CONTENT
 
     private fun copy(value: String) {
 
@@ -509,7 +542,10 @@ class MainActivity : Activity() {
             getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
 
         clipboard.setPrimaryClip(
-            ClipData.newPlainText("QR content", value)
+            ClipData.newPlainText(
+                "QR content",
+                value
+            )
         )
 
         Toast.makeText(
@@ -521,10 +557,15 @@ class MainActivity : Activity() {
 
     // LOCAL SCAN HISTORY
 
-    private fun saveHistory(raw: String, type: String) {
+    private fun saveHistory(
+        raw: String,
+        type: String
+    ) {
 
         val old = try {
-            JSONArray(prefs.getString("history", "[]"))
+            JSONArray(
+                prefs.getString("history", "[]")
+            )
         } catch (_: Exception) {
             JSONArray()
         }
@@ -550,7 +591,9 @@ class MainActivity : Activity() {
     private fun showHistory() {
 
         val arr = try {
-            JSONArray(prefs.getString("history", "[]"))
+            JSONArray(
+                prefs.getString("history", "[]")
+            )
         } catch (_: Exception) {
             JSONArray()
         }
@@ -562,11 +605,14 @@ class MainActivity : Activity() {
             "${item.optString("type")}\n${item.optString("value")}"
         }
 
-        val body = if (lines.isEmpty()) {
-            "No scans yet."
-        } else {
-            lines.joinToString("\n\n────────────\n\n")
-        }
+        val body =
+            if (lines.isEmpty()) {
+                "No scans yet."
+            } else {
+                lines.joinToString(
+                    "\n\n────────────\n\n"
+                )
+            }
 
         android.app.AlertDialog.Builder(this)
             .setTitle("Scan history")
@@ -583,13 +629,6 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-
-        if (::cameraController.isInitialized) {
-            cameraController.clearImageAnalysisAnalyzer()
-            cameraController.unbind()
-        }
-
-        scanner.close()
         cameraExecutor.shutdown()
     }
 }
