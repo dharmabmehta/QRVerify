@@ -257,8 +257,8 @@ class MainActivity : ComponentActivity() {
                 CameraSelector.DEFAULT_BACK_CAMERA
 
             cameraController.setEnabledUseCases(
-                CameraController.PREVIEW or
-                    CameraController.IMAGE_ANALYSIS
+            CameraController.PREVIEW or
+                CameraController.IMAGE_ANALYSIS
             )
 
             cameraController.setImageAnalysisAnalyzer(
