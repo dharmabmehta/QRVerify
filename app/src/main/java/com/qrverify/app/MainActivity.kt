@@ -1,4 +1,4 @@
-
+import androidx.camera.view.CameraController
 package com.qrverify.app
 
 import android.Manifest
