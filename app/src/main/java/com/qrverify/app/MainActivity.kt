@@ -1,9 +1,9 @@
-
 package com.qrverify.app
 
 import android.Manifest
-import android.app.Activity
-import android.content.*
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
@@ -11,9 +11,10 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.*
+import androidx.activity.ComponentActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.CameraController
 import androidx.camera.core.ImageProxy
-import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
@@ -27,7 +28,7 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     private lateinit var preview: PreviewView
     private lateinit var resultCard: LinearLayout
@@ -35,7 +36,6 @@ class MainActivity : Activity() {
     private lateinit var contentText: TextView
     private lateinit var actions: LinearLayout
     private lateinit var statusText: TextView
-
     private lateinit var cameraController: LifecycleCameraController
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
@@ -44,11 +44,16 @@ class MainActivity : Activity() {
     private var lastValue: String? = null
     private var noCodeFrames = 0
 
-    private var currentValue: String? = null
-    private var currentType = "Text"
-
     private val prefs by lazy {
         getSharedPreferences("qr_verify", MODE_PRIVATE)
+    }
+
+    private val scanner by lazy {
+        val options = BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .build()
+
+        BarcodeScanning.getClient(options)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,7 +93,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(20, 16, 20, 16)
-            setBackgroundColor(Color.argb(225, 15, 15, 15))
+            setBackgroundColor(Color.rgb(15, 15, 15))
         }
 
         val appTitle = TextView(this).apply {
@@ -115,7 +120,11 @@ class MainActivity : Activity() {
 
         root.addView(
             top,
-            FrameLayout.LayoutParams(-1, -2, Gravity.TOP)
+            FrameLayout.LayoutParams(
+                -1,
+                -2,
+                Gravity.TOP
+            )
         )
 
         // Scanner status
@@ -129,15 +138,18 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.argb(150, 0, 0, 0))
         }
 
-        val statusParams = FrameLayout.LayoutParams(
-            -1, -2, Gravity.TOP
-        ).apply {
-            topMargin = 66
-        }
+        root.addView(
+            statusText,
+            FrameLayout.LayoutParams(
+                -1,
+                -2,
+                Gravity.TOP
+            ).apply {
+                topMargin = 66
+            }
+        )
 
-        root.addView(statusText, statusParams)
-
-        // Bottom popup
+        // Bottom result popup
 
         resultCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -177,6 +189,7 @@ class MainActivity : Activity() {
             textSize = 22f
             setTextColor(Color.DKGRAY)
             setPadding(12, 4, 4, 8)
+
             setOnClickListener {
                 resultCard.visibility = View.GONE
             }
@@ -190,6 +203,7 @@ class MainActivity : Activity() {
             setTextColor(Color.BLACK)
             setPadding(0, 12, 0, 14)
             setTextIsSelectable(true)
+            setSingleLine(false)
         }
 
         resultCard.addView(contentText)
@@ -201,18 +215,24 @@ class MainActivity : Activity() {
 
         resultCard.addView(actions)
 
-        val cardParams = FrameLayout.LayoutParams(
-            -1, -2, Gravity.BOTTOM
-        ).apply {
-            setMargins(10, 0, 10, 12)
-        }
-
-        root.addView(resultCard, cardParams)
+        root.addView(
+            resultCard,
+            FrameLayout.LayoutParams(
+                -1,
+                -2,
+                Gravity.BOTTOM
+            ).apply {
+                setMargins(10, 0, 10, 12)
+            }
+        )
 
         setContentView(root)
     }
 
+    // CAMERA PERMISSION
+
     private fun hasCameraPermission(): Boolean {
+
         return ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.CAMERA
@@ -271,20 +291,11 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
 
             statusText.text =
-                "Unable to start camera: ${e.localizedMessage}"
+                "Camera error: ${e.localizedMessage}"
         }
     }
 
     // QR DETECTION
-
-    private val scanner by lazy {
-
-        val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .build()
-
-        BarcodeScanning.getClient(options)
-    }
 
     private fun processImage(imageProxy: ImageProxy) {
 
@@ -337,6 +348,7 @@ class MainActivity : Activity() {
                 // Ignore individual frame errors.
             }
             .addOnCompleteListener {
+
                 imageProxy.close()
                 busy.set(false)
             }
@@ -346,12 +358,11 @@ class MainActivity : Activity() {
 
     private fun showResult(raw: String) {
 
-        currentValue = raw
-
-        currentType = when {
+        val type = when {
 
             raw.trimStart().startsWith(
-                "BEGIN:VCARD", true
+                "BEGIN:VCARD",
+                ignoreCase = true
             ) -> "Contact (vCard)"
 
             raw.trim().matches(
@@ -361,10 +372,10 @@ class MainActivity : Activity() {
             else -> "Text"
         }
 
-        titleText.text = currentType
+        titleText.text = type
 
         contentText.text =
-            if (currentType == "Contact (vCard)") {
+            if (type == "Contact (vCard)") {
                 formatVCard(raw)
             } else {
                 raw
@@ -372,7 +383,7 @@ class MainActivity : Activity() {
 
         actions.removeAllViews()
 
-        when (currentType) {
+        when (type) {
 
             "Website URL" -> {
 
@@ -390,13 +401,16 @@ class MainActivity : Activity() {
                         }
 
                     try {
+
                         startActivity(
                             Intent(
                                 Intent.ACTION_VIEW,
                                 Uri.parse(target)
                             )
                         )
+
                     } catch (_: Exception) {
+
                         Toast.makeText(
                             this,
                             "Unable to open URL",
@@ -413,7 +427,7 @@ class MainActivity : Activity() {
                 }
 
                 addAction("VIEW VCARD") {
-                    showFullText(raw)
+                    contentText.text = raw
                 }
             }
 
@@ -425,9 +439,10 @@ class MainActivity : Activity() {
             }
         }
 
-        saveHistory(raw, currentType)
+        saveHistory(raw, type)
 
-        statusText.text = "QR detected • Scan the next code"
+        statusText.text =
+            "QR detected • Scan the next code"
 
         resultCard.visibility = View.VISIBLE
     }
@@ -435,21 +450,6 @@ class MainActivity : Activity() {
     // CONTACT CARD PREVIEW
 
     private fun formatVCard(raw: String): String {
-
-        val fields = raw.lines().mapNotNull { line ->
-
-            val p = line.indexOf(':')
-
-            if (p < 0) {
-                null
-            } else {
-
-                line.substring(0, p)
-                    .substringAfterLast(';')
-                    .substringAfterLast('.') to
-                    line.substring(p + 1)
-            }
-        }
 
         val labels = mapOf(
             "FN" to "Name",
@@ -459,18 +459,27 @@ class MainActivity : Activity() {
             "URL" to "Website"
         )
 
-        return fields
-            .filter { labels.containsKey(it.first.uppercase()) }
-            .joinToString("\n") {
-                "${labels[it.first.uppercase()]}: ${it.second}"
-            }
-            .ifBlank {
-                "Contact card detected"
-            }
-    }
+        return raw.lines().mapNotNull { line ->
 
-    private fun showFullText(raw: String) {
-        contentText.text = raw
+            val separator = line.indexOf(':')
+
+            if (separator < 0) {
+                return@mapNotNull null
+            }
+
+            val property = line.substring(0, separator)
+                .substringAfterLast('.')
+                .substringBefore(';')
+                .uppercase()
+
+            val label = labels[property]
+                ?: return@mapNotNull null
+
+            "$label: ${line.substring(separator + 1)}"
+
+        }.joinToString("\n").ifBlank {
+            "Contact card detected"
+        }
     }
 
     // POPUP BUTTONS
@@ -481,6 +490,7 @@ class MainActivity : Activity() {
     ) {
 
         val button = TextView(this).apply {
+
             text = label
             textSize = 13f
             gravity = Gravity.CENTER
@@ -493,13 +503,16 @@ class MainActivity : Activity() {
             }
         }
 
-        val lp = LinearLayout.LayoutParams(
-            0, -2, 1f
-        ).apply {
-            setMargins(4, 4, 4, 4)
-        }
-
-        actions.addView(button, lp)
+        actions.addView(
+            button,
+            LinearLayout.LayoutParams(
+                0,
+                -2,
+                1f
+            ).apply {
+                setMargins(4, 4, 4, 4)
+            }
+        )
     }
 
     // COPY CONTENT
@@ -510,7 +523,10 @@ class MainActivity : Activity() {
             getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
 
         clipboard.setPrimaryClip(
-            ClipData.newPlainText("QR content", value)
+            ClipData.newPlainText(
+                "QR content",
+                value
+            )
         )
 
         Toast.makeText(
@@ -522,17 +538,22 @@ class MainActivity : Activity() {
 
     // LOCAL SCAN HISTORY
 
-    private fun saveHistory(raw: String, type: String) {
+    private fun saveHistory(
+        raw: String,
+        type: String
+    ) {
 
         val old = try {
-            JSONArray(prefs.getString("history", "[]"))
+            JSONArray(
+                prefs.getString("history", "[]")
+            )
         } catch (_: Exception) {
             JSONArray()
         }
 
-        val arr = JSONArray()
+        val updated = JSONArray()
 
-        arr.put(
+        updated.put(
             JSONObject()
                 .put("value", raw)
                 .put("type", type)
@@ -540,38 +561,42 @@ class MainActivity : Activity() {
         )
 
         for (i in 0 until minOf(old.length(), 99)) {
-            arr.put(old.getJSONObject(i))
+            updated.put(old.getJSONObject(i))
         }
 
         prefs.edit()
-            .putString("history", arr.toString())
+            .putString("history", updated.toString())
             .apply()
     }
 
     private fun showHistory() {
 
-        val arr = try {
-            JSONArray(prefs.getString("history", "[]"))
+        val history = try {
+            JSONArray(
+                prefs.getString("history", "[]")
+            )
         } catch (_: Exception) {
             JSONArray()
         }
 
-        val lines = (0 until arr.length()).map { i ->
+        val entries = (0 until history.length()).map { i ->
 
-            val item = arr.getJSONObject(i)
+            val item = history.getJSONObject(i)
 
             "${item.optString("type")}\n${item.optString("value")}"
         }
 
-        val body = if (lines.isEmpty()) {
+        val message = if (entries.isEmpty()) {
             "No scans yet."
         } else {
-            lines.joinToString("\n\n────────────\n\n")
+            entries.joinToString(
+                "\n\n────────────\n\n"
+            )
         }
 
         android.app.AlertDialog.Builder(this)
             .setTitle("Scan history")
-            .setMessage(body)
+            .setMessage(message)
             .setPositiveButton("Close", null)
             .setNeutralButton("Clear history") { _, _ ->
 
@@ -582,10 +607,13 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // CLEANUP
+
     override fun onDestroy() {
         super.onDestroy()
 
         if (::cameraController.isInitialized) {
+
             cameraController.clearImageAnalysisAnalyzer()
             cameraController.unbind()
         }
