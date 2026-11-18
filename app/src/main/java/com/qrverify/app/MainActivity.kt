@@ -20,6 +20,8 @@ import androidx.camera.view.CameraController
 import androidx.camera.view.LifecycleCameraController
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -240,7 +242,46 @@ class MainActivity : ComponentActivity() {
             }
         )
 
+        // SYSTEM SCREEN INSETS
+        // Keep controls clear of Android status and navigation bars.
+
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, windowInsets ->
+
+            val systemBars = windowInsets.getInsets(
+                WindowInsetsCompat.Type.systemBars()
+            )
+
+            // Move top navigation below the status bar.
+
+            top.setPadding(
+                20,
+                16 + systemBars.top,
+                20,
+                16
+            )
+
+            // Position scanner status below the top navigation.
+
+            val statusParams =
+                statusText.layoutParams as FrameLayout.LayoutParams
+
+            statusParams.topMargin = 66 + systemBars.top
+            statusText.layoutParams = statusParams
+
+            // Lift the result popup above the navigation bar.
+
+            val cardParams =
+                resultCard.layoutParams as FrameLayout.LayoutParams
+
+            cardParams.bottomMargin = 12 + systemBars.bottom
+            resultCard.layoutParams = cardParams
+
+            windowInsets
+        }
+
         setContentView(root)
+
+        ViewCompat.requestApplyInsets(root)
     }
 
     // CAMERA PERMISSION
@@ -263,9 +304,6 @@ class MainActivity : ComponentActivity() {
 
             cameraController.cameraSelector =
                 CameraSelector.DEFAULT_BACK_CAMERA
-
-            // Enable QR image analysis.
-            // Preview is managed automatically by PreviewView.
 
             cameraController.setEnabledUseCases(
                 CameraController.IMAGE_ANALYSIS
